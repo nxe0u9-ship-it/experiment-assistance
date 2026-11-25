@@ -55,9 +55,43 @@ def analyze_video(path, interval, roi):
     finally:
         cap.release()
 
+# 기준 용액의 색상 강도로 상대 흡광 지표를 계산한다.
+def fit_calibration(table, channel):
+    c = table['농도'].to_numpy(dtype=float)
+    intensity = table[channel].to_numpy(dtype=float)
+    if len(c) < 3 or not np.isfinite(c).all() or not np.isfinite(intensity).all():
+        raise ValueError('유효한 기준 용액 데이터를 3개 이상 입력하세요.')
+    if (c < 0).any() or len(np.unique(c)) != len(c):
+        raise ValueError('농도는 음수가 아니어야 하며 중복될 수 없습니다.')
+    if (intensity <= 0).any() or (intensity > 255).any() or sum(c == 0) != 1:
+        raise ValueError('0 농도 기준 용액 1개와 0 초과 255 이하의 색상값이 필요합니다.')
+    i0 = intensity[c == 0][0]
+    a = np.log10(i0 / intensity)
+    slope, intercept = np.polyfit(c, a, 1)
+    predicted = slope * c + intercept
+    total = np.sum((a - a.mean()) ** 2)
+    if slope <= 0 or total <= 1e-12:
+        raise ValueError('농도 증가에 따른 흡광 지표 증가가 확인되지 않습니다. 채널과 기준값을 확인하세요.')
+    r2 = 1 - np.sum((a - predicted) ** 2) / total
+    return i0, slope, intercept, r2, a
+
+# 영상 RGB 결과를 검량선의 유효 범위 안에서만 농도로 변환한다.
+def estimate_concentration(result, channel, i0, slope, intercept, low, high):
+    out = result.copy()
+    values = out[channel].to_numpy(dtype=float)
+    a = np.full(len(values), np.nan)
+    valid = np.isfinite(values) & (values > 0) & (values <= 255)
+    a[valid] = np.log10(i0 / values[valid])
+    c = (a - intercept) / slope
+    inside = np.isfinite(c) & (c >= low - 1e-9) & (c <= high + 1e-9)
+    out['상대 흡광 지표'] = a
+    out['추정 농도'] = np.where(inside, np.clip(c, low, high), np.nan)
+    out['검량선 범위'] = np.where(inside, '범위 내', '범위 밖 또는 측정 불가')
+    return out
+
 st.title('HydroRelease Lab')
-st.caption('1차 개발 버전 | 동영상 프레임 추출 및 RGB 분석')
-st.info('현재 결과는 RGB 색상값입니다. 검량선이 없으므로 실제 농도나 방출률로 해석하지 않습니다.')
+st.caption('2차 개발 버전 | 영상 분석 및 검량선 기반 농도 추정')
+st.info('실제 농도 추정에는 동일한 촬영 조건에서 측정한 기준 용액 데이터가 필요합니다.')
 upload = st.file_uploader('실험 동영상 업로드', type=['mp4'])
 if upload is not None:
     path = save_video(upload)
@@ -90,3 +124,42 @@ if upload is not None:
         st.error(str(e))
     finally:
         os.unlink(path)
+
+# 검량선 입력 화면: 예시 데이터는 실제 실험값과 구분한다.
+st.header('검량선 및 색소 농도 분석')
+mode = st.radio('기준 데이터 종류', ['테스트용 가상 데이터', '실제 기준 용액 데이터'])
+channel = st.selectbox('분석 색상 채널', ['R', 'G', 'B'])
+if mode == '테스트용 가상 데이터':
+    st.warning('가상 기준 데이터입니다. 실제 농도 또는 방출률로 해석할 수 없습니다.')
+    initial = pd.DataFrame({'농도': [0., 20., 40., 60., 80., 100.],
+        'R': 245 * 10 ** (-0.0065 * np.arange(0,101,20)),
+        'G': 245 * 10 ** (-0.0028 * np.arange(0,101,20)),
+        'B': 245 * 10 ** (-0.0004 * np.arange(0,101,20))})
+    unit = '가상 상대 농도 단위'
+else:
+    initial = pd.DataFrame({'농도': [0., 1., 2.], 'R': [np.nan]*3, 'G': [np.nan]*3, 'B': [np.nan]*3})
+    unit = st.text_input('농도 단위', 'mg/L')
+table = st.data_editor(initial, num_rows='dynamic', key='cal_' + mode)
+try:
+    i0, slope, intercept, r2, a = fit_calibration(table, channel)
+    st.write(f'A = {slope:.6f} × C + {intercept:.6f}')
+    st.metric('결정계수 R²', f'{r2:.4f}')
+    chart = pd.DataFrame({'농도': table['농도'], '측정 지표': a, '회귀 예측': slope * table['농도'] + intercept}).sort_values('농도')
+    st.line_chart(chart.set_index('농도'))
+    if r2 < 0.95:
+        st.warning('선형 적합도가 낮습니다. 기준 용액과 촬영 조건을 확인하세요. R²만으로 정확성이 보장되지는 않습니다.')
+    current = upload is not None and 'x1' in locals() and 'y1' in locals() and st.session_state.get('rgb_settings') == (upload.file_id, interval, x1,y1,x2,y2)
+    if current:
+        out = estimate_concentration(st.session_state['rgb_result'], channel, i0, slope, intercept, float(table['농도'].min()), float(table['농도'].max()))
+        st.subheader(f'시간별 추정 농도 ({unit})')
+        st.line_chart(out.set_index('시간(초)')['추정 농도'])
+        st.dataframe(out)
+        if out['추정 농도'].isna().any():
+            st.warning('검량선 범위 밖의 값은 농도로 변환하지 않았습니다.')
+        out['농도 단위'] = unit
+        out['기준 데이터 종류'] = mode
+        st.download_button('농도 분석 CSV 다운로드', out.to_csv(index=False).encode('utf-8-sig'), 'concentration_result.csv', 'text/csv')
+    else:
+        st.info('먼저 동영상 분석을 실행하면 농도 결과가 표시됩니다.')
+except (ValueError, TypeError, np.linalg.LinAlgError) as e:
+    st.info(str(e))
