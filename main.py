@@ -89,8 +89,87 @@ def estimate_concentration(result, channel, i0, slope, intercept, low, high):
     out['검량선 범위'] = np.where(inside, '범위 내', '범위 밖 또는 측정 불가')
     return out
 
+# 농도(mg/L)와 외부 용액 부피(L)로 방출량을 계산한다.
+def calculate_release(data, volume_ml, initial_mass=None):
+    if not np.isfinite(volume_ml) or volume_ml <= 0:
+        raise ValueError('용액 부피는 양수여야 합니다.')
+    if initial_mass is not None and (not np.isfinite(initial_mass) or initial_mass <= 0):
+        raise ValueError('초기 색소량은 양수여야 합니다.')
+    out = data.sort_values('시간(초)').reset_index(drop=True).copy()
+    t = out['시간(초)'].to_numpy(dtype=float) / 60
+    if not np.isfinite(t).all() or (t < 0).any() or (np.diff(t) <= 0).any():
+        raise ValueError('시간은 중복 없이 증가해야 합니다.')
+    c = out['추정 농도'].to_numpy(dtype=float)
+    mass = np.where(np.isfinite(c) & (c >= 0), c * volume_ml / 1000, np.nan)
+    out['시간(분)'] = t
+    out['누적 방출량(mg)'] = mass
+    out['평균 방출 속도(mg/min)'] = np.r_[np.nan, np.diff(mass) / np.diff(t)] if len(t) else []
+    t50 = None
+    if initial_mass is not None:
+        fraction = mass / initial_mass * 100
+        out['누적 방출률(%)'] = fraction
+        # 처음 50%를 넘는 구간이 연속 측정되었을 때만 선형 보간한다.
+        hits = np.flatnonzero(np.isfinite(fraction) & (fraction >= 50))
+        if len(hits):
+            j = hits[0]
+            if j > 0 and np.isfinite(fraction[:j]).all() and fraction[j-1] < 50:
+                t50 = t[j-1] + (50-fraction[j-1]) * (t[j]-t[j-1]) / (fraction[j]-fraction[j-1])
+    return out, t50
+
+
+def show_release(data, unit, mode):
+    st.header('물질 방출 특성 분석')
+    demo = mode == '테스트용 가상 데이터'
+    if demo:
+        st.warning('기능 테스트 전용: 가상 농도 수치를 mg/L라고 가정하여 계산합니다. 실제 방출량이 아닙니다.')
+    elif unit.strip().lower() != 'mg/l':
+        st.warning('방출량 계산에는 기준 농도 단위를 mg/L로 통일해야 합니다. 검량선 입력을 확인하세요.')
+        return
+    st.caption('외부 용액의 초기 색소량이 0이고, 부피가 일정하며 균일하게 혼합되고, 별도 채취나 손실이 없다는 가정입니다.')
+    volume = st.number_input('외부 용액 부피 (mL)', min_value=0.1, value=100.0, step=10.0)
+    known = st.checkbox('초기 하이드로젤 색소 포함량을 알고 있음', value=demo)
+    initial = st.number_input('초기 색소 포함량 (mg)', min_value=0.001, value=10.0, format='%.3f') if known else None
+    try:
+        result, t50 = calculate_release(data, volume, initial)
+    except ValueError as e:
+        st.error(str(e))
+        return
+    result['방출 분석 구분'] = '가상 테스트' if demo else '실험 추정값'
+    result['외부 용액 부피(mL)'] = volume
+    result['초기 색소량(mg)'] = initial
+    st.session_state['latest_release'] = result.copy()
+    mass = result['누적 방출량(mg)']
+    rate = result['평균 방출 속도(mg/min)']
+    cols = st.columns(3)
+    cols[0].metric('마지막 측정 방출량', f'{mass.iloc[-1]:.3f} mg' if len(mass) and pd.notna(mass.iloc[-1]) else '측정 불가')
+    cols[1].metric('첫 구간 평균 속도', f'{rate.iloc[1]:.3f} mg/min' if len(rate)>1 and pd.notna(rate.iloc[1]) else '측정 불가')
+    cols[2].metric('T₅₀ (선형 보간)', f'{t50:.3f} 분' if t50 is not None else '산출 불가')
+    if len(mass) and pd.notna(mass.iloc[0]) and mass.iloc[0] > 0:
+        st.info('첫 프레임에서 이미 색소가 검출되었습니다. 실험 시작 전 배경 농도 또는 촬영 시작 시점을 확인하세요.')
+    if rate.lt(0).any():
+        st.warning('방출량 감소 구간이 있습니다. 측정 오차 또는 혼합 상태를 확인하세요. 값은 임의로 보정하지 않았습니다.')
+    indexed = result.set_index('시간(분)')
+    st.subheader('시간별 누적 방출량')
+    st.line_chart(indexed['누적 방출량(mg)'])
+    st.subheader('구간별 평균 방출 속도')
+    st.line_chart(indexed['평균 방출 속도(mg/min)'])
+    st.caption('각 속도는 직전 측정 시점부터 현재 시점까지의 평균입니다. 첫 시점 및 결측 구간은 계산하지 않습니다.')
+    if initial is not None:
+        st.subheader('시간별 누적 방출률')
+        st.line_chart(indexed['누적 방출률(%)'])
+        if result['누적 방출률(%)'].gt(100).any():
+            st.warning('100% 초과 값이 있습니다. 초기 색소량, 부피 및 검량선을 확인하세요.')
+        if t50 is None:
+            st.info('50% 미도달, 첫 측정부터 50% 이상, 또는 결측으로 T₅₀를 확정할 수 없습니다.')
+    else:
+        st.info('초기 포함량을 모르면 누적 방출률과 T₅₀는 계산하지 않습니다.')
+    st.dataframe(result)
+    st.download_button('방출 분석 CSV 다운로드', result.to_csv(index=False).encode('utf-8-sig'), 'release_result.csv', 'text/csv')
+
+
+st.session_state.pop('latest_release', None)
 st.title('HydroRelease Lab')
-st.caption('2차 개발 버전 | 영상 분석 및 검량선 기반 농도 추정')
+st.caption('5차 개발 버전 | 영상·농도·방출·크기 비교·확산 모형')
 st.info('실제 농도 추정에는 동일한 촬영 조건에서 측정한 기준 용액 데이터가 필요합니다.')
 upload = st.file_uploader('실험 동영상 업로드', type=['mp4'])
 if upload is not None:
@@ -159,7 +238,117 @@ try:
         out['농도 단위'] = unit
         out['기준 데이터 종류'] = mode
         st.download_button('농도 분석 CSV 다운로드', out.to_csv(index=False).encode('utf-8-sig'), 'concentration_result.csv', 'text/csv')
+        show_release(out, unit, mode)
     else:
         st.info('먼저 동영상 분석을 실행하면 농도 결과가 표시됩니다.')
 except (ValueError, TypeError, np.linalg.LinAlgError) as e:
     st.info(str(e))
+
+# 코드 4: 실험군별 방출 결과 저장 및 비교
+st.divider()
+st.header('크기별 실험군 비교')
+st.caption('실험군마다 영상 분석, 검량선 및 방출 분석을 완료한 뒤 저장하세요. 같은 이름은 덮어씁니다. 실제 실험과 가상 테스트는 분리하여 비교합니다.')
+if 'release_groups' not in st.session_state:
+    st.session_state['release_groups'] = {}
+groups = st.session_state['release_groups']
+group_name = st.text_input('실험군 이름', '소형 비드')
+diameter = st.number_input('실험군 평균 지름 (mm)', min_value=0.01, value=2.0, step=0.5)
+bead_count = st.number_input('실험군 비드 개수', min_value=1, value=1, step=1)
+if st.button('현재 방출 결과를 실험군에 저장'):
+    latest = st.session_state.get('latest_release')
+    if latest is None or not group_name.strip():
+        st.error('유효한 방출 분석 결과와 실험군 이름이 필요합니다.')
+    elif not latest['누적 방출량(mg)'].notna().any():
+        st.error('유효한 방출량 데이터가 없습니다.')
+    else:
+        groups[group_name.strip()] = (diameter, bead_count, latest.copy())
+        st.success('실험군을 저장했습니다.')
+if groups:
+    remove = st.selectbox('삭제할 실험군', list(groups))
+    if st.button('선택 실험군 삭제'):
+        del groups[remove]
+        st.rerun()
+    selected = st.multiselect('비교할 실험군', list(groups), default=list(groups))
+    if selected:
+        kinds = {groups[n][2]['방출 분석 구분'].iloc[0] for n in selected}
+        if len(kinds) > 1:
+            st.warning('실험 추정값과 가상 테스트를 함께 비교할 수 없습니다.')
+        else:
+            st.caption(' / '.join(kinds))
+            tables, summaries = [], []
+            for name in selected:
+                d, n, df = groups[name]
+                temp = df.assign(실험군=name, 지름_mm=d, 비드_개수=n)
+                tables.append(temp)
+                summaries.append({'실험군':name, '지름(mm)':d, '비드 개수':n,
+                    '총부피(mm³)':n*np.pi*d**3/6, '총표면적(mm²)':n*np.pi*d**2,
+                    '표면적/부피(mm⁻¹)':6/d,
+                    '첫 구간 속도(mg/min)':df['평균 방출 속도(mg/min)'].iloc[1] if len(df)>1 else np.nan})
+            combined = pd.concat(tables, ignore_index=True)
+            st.dataframe(pd.DataFrame(summaries))
+            for metric in ['누적 방출량(mg)', '누적 방출률(%)', '평균 방출 속도(mg/min)']:
+                if metric in combined and combined[metric].notna().any():
+                    st.subheader(metric)
+                    st.line_chart(combined.pivot(index='시간(분)', columns='실험군', values=metric))
+            st.caption('측정 시간이 다른 실험군은 실제 측정 시점으로 표시합니다. 공정한 비교를 위해 총 초기 색소량, 용액 부피, 가교 조건 등을 통제하세요.')
+            st.download_button('실험군 비교 CSV 다운로드', combined.to_csv(index=False).encode('utf-8-sig'), 'group_comparison.csv','text/csv')
+else:
+    st.info('저장한 실험군이 없습니다. 실험군은 현재 브라우저 세션에만 보관됩니다.')
+
+# 코드 5: 구형 비드 구조 및 이상적인 확산 모형
+st.divider()
+st.header('하이드로젤 물리적 구조 분석')
+d = st.number_input('구형 비드 지름 (mm)', min_value=0.01, value=4.0, step=0.5)
+n = st.number_input('구형 비드 개수', min_value=1, value=27, step=1)
+area = np.pi*d**2
+volume = np.pi*d**3/6
+cols = st.columns(3)
+cols[0].metric('비드 1개 표면적', f'{area:.3f} mm²')
+cols[1].metric('비드 1개 부피', f'{volume:.3f} mm³')
+cols[2].metric('표면적/부피', f'{6/d:.3f} mm⁻¹')
+st.write(f'총 표면적: {area*n:.3f} mm² | 총 부피: {volume*n:.3f} mm³')
+st.caption('완전한 구형이며 비드가 서로 겹치지 않는다는 가정입니다.')
+
+# 일정한 확산계수, 초기 균일 농도, 완전 흡수 경계의 구형 확산 해.
+def sphere_release(time_s, diameter_mm, diffusivity):
+    t = np.asarray(time_s, dtype=float)
+    if diameter_mm <= 0 or diffusivity <= 0 or np.any(t < 0):
+        raise ValueError('지름과 확산계수는 양수, 시간은 음수가 아니어야 합니다.')
+    radius = diameter_mm/2
+    tau = diffusivity*t/radius**2
+    result = np.zeros_like(tau)
+    # 짧은 시간에서는 급수 수렴 문제를 피하는 단시간 근사식을 사용한다.
+    short = (tau > 0) & (tau < 0.001)
+    result[short] = 6*np.sqrt(tau[short]/np.pi)-3*tau[short]
+    other = tau >= 0.001
+    k = np.arange(1, 201, dtype=float)
+    result[other] = 1-6/np.pi**2*np.sum(np.exp(-np.pi**2*tau[other,None]*k**2)/k**2, axis=1)
+    return np.clip(result, 0, 1)*100
+
+st.header('확산 기반 이론적 방출 모형')
+st.info('이상적인 구형 확산 모형입니다. 확산계수 일정, 초기 색소 균일 분포, 표면 농도 0(완전 흡수 경계), 팽윤·분해 없음 등을 가정합니다. 실제 실험에서 이 가정은 성립하지 않을 수 있습니다.')
+D = st.number_input('가정한 유효 확산계수 (mm²/s)', min_value=0.00000001, value=0.0001, format='%.8f', step=0.00001)
+end_min = st.number_input('모형 분석 시간 (분)', min_value=0.1, value=30.0, step=5.0)
+model_sizes = st.multiselect('비교할 모형 지름 (mm)', [2., 4., 6.], default=[2.,4.,6.])
+times = np.linspace(0, end_min, 301)
+model = pd.DataFrame({'시간(분)':times})
+for size in model_sizes:
+    model[f'{size:g} mm 이론 방출률(%)'] = sphere_release(times*60, size, D)
+if model_sizes:
+    st.line_chart(model.set_index('시간(분)'))
+if groups:
+    target = st.selectbox('이론과 비교할 저장 실험군', ['선택 안 함'] + list(groups))
+    if target != '선택 안 함':
+        size, _, df = groups[target]
+        if '누적 방출률(%)' not in df or not df['누적 방출률(%)'].notna().any():
+            st.warning('초기 색소량을 알고 있는 실험군만 방출률을 비교할 수 있습니다.')
+        else:
+            comparison = df[['시간(분)', '누적 방출률(%)']].copy()
+            comparison['이론 방출률(%)'] = sphere_release(comparison['시간(분)'].to_numpy()*60, size, D)
+            comparison['잔차(%p)'] = comparison['누적 방출률(%)']-comparison['이론 방출률(%)']
+            st.caption(f"{target} | {df['방출 분석 구분'].iloc[0]} | 지름 {size:g} mm")
+            st.line_chart(comparison.set_index('시간(분)')[['누적 방출률(%)','이론 방출률(%)']])
+            st.metric('RMSE (%p)', f"{np.sqrt(np.nanmean(comparison['잔차(%p)']**2)):.3f}")
+            st.dataframe(comparison)
+            st.download_button('이론·실험 비교 CSV 다운로드', comparison.to_csv(index=False).encode('utf-8-sig'), 'model_comparison.csv','text/csv')
+st.caption('확산계수는 직접 설정한 가정값이며 자동 추정된 실험 물성값이 아닙니다. 모형 일치만으로 실제 약물의 방출이나 치료 효과를 입증할 수 없습니다.')
