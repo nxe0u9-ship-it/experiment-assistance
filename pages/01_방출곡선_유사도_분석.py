@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 
+
 # ==========================================
 # 1. 페이지 기본 설정
 # ==========================================
@@ -137,30 +138,31 @@ transfer = st.session_state.get(
     "similarity_transfer"
 )
 
+# 이전 개발 버전에서 남아 있는 데이터를 사용하지 않는다.
+
+if transfer is not None:
+
+    if transfer.get("source") != "영상·농도·방출 분석":
+
+        st.session_state.pop(
+            "similarity_transfer",
+            None
+        )
+
+        st.session_state.pop(
+            "imported_experiment_name",
+            None
+        )
+
+        st.session_state.pop(
+            "imported_conditions",
+            None
+        )
+
+        transfer = None
+
+
 has_transfer = transfer is not None
-
-is_demo = (
-    bool(transfer.get("is_demo", False))
-    if has_transfer
-    else False
-)
-
-if has_transfer:
-
-    if is_demo:
-
-        st.warning(
-            "영상·농도·방출 분석 페이지에서 전달된 "
-            "테스트용 가상 데이터입니다. "
-            "분석 결과는 기능 검증에만 활용하세요."
-        )
-
-    else:
-
-        st.success(
-            "영상·농도·방출 분석 결과가 "
-            "자동으로 연동되었습니다."
-        )
 
 
 # ==========================================
@@ -217,7 +219,8 @@ try:
     st.line_chart(
         target.set_index("시간"),
         x_label=f"시간({unit})",
-        y_label="누적 방출률(%)"
+        y_label="누적 방출률(%)",
+        color="#16803D"
     )
 
 except ValueError as e:
@@ -290,32 +293,24 @@ if has_transfer:
         if imported.isna().any().any():
 
             raise ValueError(
-                "전달된 데이터에 측정 불가 값이 포함되어 있습니다."
+                "전달된 데이터에 측정 불가 값이 "
+                "포함되어 있습니다."
             )
 
         imported = validate_data(
             imported
         )
 
-        if is_demo:
-
-            st.warning(
-                f"테스트용 측정 데이터 "
-                f"{len(imported)}개가 자동 입력되었습니다."
-            )
-
-        else:
-
-            st.success(
-                f"실험 측정 데이터 "
-                f"{len(imported)}개가 자동 입력되었습니다."
-            )
+        st.success(
+            f"시간별 누적 방출률 데이터 "
+            f"{len(imported)}개가 자동으로 연동되었습니다."
+        )
 
         imported_name = st.text_input(
             "실험군 이름",
             value=transfer.get(
                 "name",
-                "현재 실험 결과"
+                "실험군 1"
             ),
             key="imported_experiment_name"
         )
@@ -361,8 +356,7 @@ if has_transfer:
                 )
             )
 
-        # 전달된 데이터가 실제 실험 데이터 영역에
-        # 자동으로 표시되도록 한다.
+        # 전달된 데이터를 실제 실험 데이터 영역에 표시한다.
 
         st.dataframe(
             imported,
@@ -372,8 +366,8 @@ if has_transfer:
         )
 
         st.caption(
-            "영상·농도·방출 분석 결과에서 "
-            "자동으로 가져온 데이터입니다. "
+            "영상·농도·방출 분석 페이지에서 "
+            "계산한 실험 결과입니다. "
             "별도로 입력할 필요가 없습니다."
         )
 
@@ -388,27 +382,20 @@ if has_transfer:
                 "측정 오차 또는 계산 오류를 확인해 주세요."
             )
 
-        # 전달받은 데이터를 유사도 분석 대상에
-        # 직접 추가하는 핵심 코드이다.
+        # 전달받은 데이터를 유사도 분석 대상에 추가한다.
 
         experiments.append({
 
             "name": (
                 imported_name.strip()
-                or "현재 실험 결과"
+                or "실험군 1"
             ),
 
             "conditions": conditions,
 
-            "source": (
-                "테스트용 가상 데이터"
-                if is_demo
-                else "영상·농도·방출 분석 연동"
-            ),
+            "source": "영상·농도·방출 분석 연동",
 
-            "data": imported.copy(),
-
-            "is_demo": is_demo
+            "data": imported.copy()
 
         })
 
@@ -424,6 +411,8 @@ if has_transfer:
         )
 
         input_error = True
+
+    # 연동된 데이터 제거 기능
 
     if st.button(
         "연동된 실험 데이터 제거",
@@ -470,8 +459,8 @@ else:
     st.subheader("실험 데이터 직접 입력")
 
     st.caption(
-        "영상 분석 결과를 전달하지 않은 경우 "
-        "측정 데이터를 직접 입력할 수 있습니다."
+        "측정한 시간별 누적 방출률과 "
+        "하이드로젤 제조 조건을 입력해 주세요."
     )
 
 # 자동 연동된 데이터가 있으면
@@ -496,15 +485,21 @@ manual_count = st.number_input(
 
 for i in range(manual_count):
 
+    # 자동 연동된 실험군과 이름이 겹치지 않도록 한다.
+
+    group_number = (
+        i + 2 if has_transfer else i + 1
+    )
+
     with st.expander(
-        f"직접 입력 실험군 {i + 1}",
+        f"직접 입력 실험군 {group_number}",
         expanded=True
     ):
 
         name = st.text_input(
             "실험군 이름",
-            value=f"실험군 {i + 1}",
-            key=f"manual_name_{i}"
+            value=f"실험군 {group_number}",
+            key=f"manual_name_{has_transfer}_{i}"
         )
 
         conditions = st.text_area(
@@ -513,13 +508,7 @@ for i in range(manual_count):
                 "알지네이트 농도, 가교제 농도, "
                 "가교 시간, 비드 크기 등을 입력하세요."
             ),
-            key=f"manual_conditions_{i}"
-        )
-
-        manual_demo = st.checkbox(
-            "테스트용 가상 데이터",
-            value=is_demo if has_transfer else False,
-            key=f"manual_demo_{i}"
+            key=f"manual_conditions_{has_transfer}_{i}"
         )
 
         edited = st.data_editor(
@@ -527,7 +516,7 @@ for i in range(manual_count):
             num_rows="dynamic",
             hide_index=True,
             use_container_width=True,
-            key=f"manual_data_{i}_{unit}",
+            key=f"manual_data_{has_transfer}_{i}_{unit}",
             column_config=editor_config(unit)
         )
 
@@ -550,20 +539,14 @@ for i in range(manual_count):
 
                 "name": (
                     name.strip()
-                    or f"실험군 {i + 1}"
+                    or f"실험군 {group_number}"
                 ),
 
                 "conditions": conditions,
 
-                "source": (
-                    "직접 입력한 가상 데이터"
-                    if manual_demo
-                    else "직접 입력"
-                ),
+                "source": "직접 입력",
 
-                "data": valid,
-
-                "is_demo": manual_demo
+                "data": valid
 
             })
 
@@ -611,32 +594,6 @@ if input_error:
 
     st.stop()
 
-# 실제 실험 결과와 가상 데이터를 혼합하여
-# 비교하지 않도록 한다.
-
-data_types = {
-    experiment["is_demo"]
-    for experiment in experiments
-}
-
-if len(data_types) > 1:
-
-    st.warning(
-        "실제 실험 데이터와 테스트용 가상 데이터는 "
-        "동시에 비교할 수 없습니다."
-    )
-
-    st.stop()
-
-analysis_demo = True in data_types
-
-if analysis_demo:
-
-    st.warning(
-        "현재 유사도 분석은 가상 데이터를 "
-        "이용한 기능 검증입니다."
-    )
-
 st.caption(
     f"총 {len(experiments)}개 실험군을 분석합니다."
 )
@@ -655,13 +612,13 @@ with st.expander("유사도 계산 원리"):
     )
 
     st.write(
-        "T는 목표 방출률, E는 실제 방출률, "
+        "T는 목표 방출률, E는 실험 방출률, "
         "n은 비교 시점의 개수입니다."
     )
 
     st.write(
         "RMSE가 작을수록 목표 방출 곡선과 "
-        "실험 방출 곡선이 유사합니다."
+        "실험 방출 곡선의 차이가 작습니다."
     )
 
     st.latex(
@@ -717,7 +674,7 @@ common_time = np.linspace(
     201
 )
 
-# 선형 보간으로 목표 방출률 계산
+# 선형 보간으로 목표 방출률을 계산한다.
 
 target_y = np.interp(
     common_time,
@@ -745,7 +702,7 @@ for i, experiment in enumerate(experiments):
     data = experiment["data"]
 
     # 측정 시간이 다른 경우 선형 보간을 적용한다.
-    # 측정 시간 범위 밖의 값은 추정하지 않는다.
+    # 측정 범위 밖의 값은 추정하지 않는다.
 
     actual_y = np.interp(
         common_time,
@@ -756,11 +713,9 @@ for i, experiment in enumerate(experiments):
     # 평균 제곱근 오차 계산
 
     rmse = np.sqrt(
-
         np.mean(
             (target_y - actual_y) ** 2
         )
-
     )
 
     # 유사도 점수 계산
@@ -823,10 +778,31 @@ if partial_analysis:
         "해석할 수 없습니다."
     )
 
+# 초록색 계열을 중심으로 그래프 색상을 설정한다.
+# 실험군이 많을 때 구분할 수 있도록 보조 색상도 사용한다.
+
+chart_colors = [
+
+    "#14532D",
+    "#22C55E",
+    "#0D9488",
+    "#84A98C",
+    "#65A30D",
+    "#0891B2",
+    "#CA8A04",
+    "#2563EB",
+    "#9333EA",
+    "#EA580C",
+    "#64748B",
+    "#BE185D"
+
+]
+
 st.line_chart(
     chart_data.set_index("시간"),
     x_label=f"시간({unit})",
-    y_label="누적 방출률(%)"
+    y_label="누적 방출률(%)",
+    color=chart_colors[:len(experiments) + 1]
 )
 
 st.caption(
@@ -864,7 +840,7 @@ ranking.insert(
 
 )
 
-# 실험군이 한 개일 경우 유사도와 RMSE를 바로 표시한다.
+# 실험군이 한 개일 경우
 
 if len(ranking) == 1:
 
@@ -899,6 +875,16 @@ if len(ranking) == 1:
     st.caption(
         f'데이터 출처: {best["데이터 출처"]}'
     )
+
+    if best["제조 조건"].strip():
+
+        st.write(
+            "**하이드로젤 제조 조건**"
+        )
+
+        st.write(
+            best["제조 조건"]
+        )
 
 else:
 
@@ -994,12 +980,6 @@ st.dataframe(
 
 col1, col2 = st.columns(2)
 
-# 가상 데이터의 다운로드 파일명과 출처를 구분한다.
-
-file_prefix = (
-    "demo_" if analysis_demo else ""
-)
-
 with col1:
 
     st.download_button(
@@ -1010,9 +990,7 @@ with col1:
             index=False
         ).encode("utf-8-sig"),
 
-        file_name=(
-            f"{file_prefix}release_similarity.csv"
-        ),
+        file_name="release_similarity.csv",
 
         mime="text/csv",
 
@@ -1028,12 +1006,6 @@ with col2:
         }
     ).copy()
 
-    export_chart["데이터 구분"] = (
-        "테스트용 가상 데이터"
-        if analysis_demo
-        else "실험 데이터"
-    )
-
     st.download_button(
 
         label="📥 방출 곡선 데이터 CSV 다운로드",
@@ -1042,9 +1014,7 @@ with col2:
             index=False
         ).encode("utf-8-sig"),
 
-        file_name=(
-            f"{file_prefix}release_curves.csv"
-        ),
+        file_name="release_curves.csv",
 
         mime="text/csv",
 
