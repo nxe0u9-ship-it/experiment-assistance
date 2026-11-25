@@ -6,12 +6,6 @@ import numpy as np
 # 1. 페이지 기본 설정
 # ==========================================
 
-st.set_page_config(
-    page_title="방출 곡선 유사도 분석",
-    page_icon="📈",
-    layout="wide"
-)
-
 st.title("📈 방출 곡선 유사도 분석")
 
 st.caption(
@@ -20,8 +14,9 @@ st.caption(
 
 st.info(
     "목표 방출 곡선과 실제 실험 결과를 비교하여 "
-    "목표 방출 특성에 가장 가까운 실험군을 탐색합니다."
+    "목표 방출 특성에 가장 가까운 실험 조건을 탐색합니다."
 )
+
 
 # ==========================================
 # 2. 데이터 처리 함수
@@ -35,7 +30,7 @@ TIME_FACTORS = {
 }
 
 
-# 빈 입력표 생성
+# 빈 데이터 입력표 생성
 
 def create_empty_data():
 
@@ -51,15 +46,29 @@ def create_empty_data():
     })
 
 
-# 입력 데이터의 유효성 검사
+# 데이터 유효성 검사
 
 def validate_data(df):
 
-    df = df.dropna(how="all").copy()
+    required = [
+        "시간",
+        "누적 방출률(%)"
+    ]
+
+    if not all(col in df.columns for col in required):
+
+        raise ValueError(
+            "필수 데이터 항목이 누락되었습니다."
+        )
+
+    df = df[required].copy()
+
+    df = df.dropna(how="all")
 
     if len(df) < 2:
+
         raise ValueError(
-            "데이터를 2개 이상 입력해 주세요."
+            "시간과 누적 방출률을 2개 이상 입력해 주세요."
         )
 
     df = df.apply(
@@ -67,25 +76,30 @@ def validate_data(df):
         errors="coerce"
     )
 
-    if not np.isfinite(df.to_numpy()).all():
+    if not np.isfinite(
+        df.to_numpy(dtype=float)
+    ).all():
+
         raise ValueError(
             "모든 항목에 유효한 숫자를 입력해 주세요."
         )
 
     if (df["시간"] < 0).any():
+
         raise ValueError(
             "시간은 음수가 될 수 없습니다."
         )
 
     if df["시간"].duplicated().any():
+
         raise ValueError(
-            "동일한 시간이 중복되어 있습니다."
+            "동일한 측정 시간이 중복되어 있습니다."
         )
 
-    if (
-        (df["누적 방출률(%)"] < 0)
-        | (df["누적 방출률(%)"] > 100)
-    ).any():
+    if not df["누적 방출률(%)"].between(
+        0, 100
+    ).all():
+
         raise ValueError(
             "누적 방출률은 0~100% 사이여야 합니다."
         )
@@ -95,74 +109,62 @@ def validate_data(df):
     ).reset_index(drop=True)
 
 
-# 실험 데이터 분석 페이지에서 가져온 데이터 변환
-
-def convert_release_data(df, unit):
-
-    required = [
-        "시간(분)",
-        "누적 방출률(%)"
-    ]
-
-    if not all(col in df.columns for col in required):
-        raise ValueError(
-            "누적 방출률이 계산되지 않은 실험군입니다."
-        )
-
-    if "방출 분석 구분" not in df.columns:
-        raise ValueError(
-            "실험 데이터의 출처를 확인할 수 없습니다."
-        )
-
-    if not df["방출 분석 구분"].eq("실험 추정값").all():
-        raise ValueError(
-            "테스트용 가상 데이터는 불러올 수 없습니다."
-        )
-
-    converted = df[required].copy()
-
-    converted = converted.rename(
-        columns={"시간(분)": "시간"}
-    )
-
-    # 기존 페이지는 분 단위로 저장하므로
-    # 현재 유사도 분석 페이지의 시간 단위로 환산한다.
-
-    converted["시간"] = (
-        converted["시간"] * TIME_FACTORS[unit]
-    )
-
-    # 결측값을 임의로 채우거나 제거하지 않는다.
-    # 잘못된 방출률도 임의로 보정하지 않는다.
-
-    if converted.isna().any().any():
-        raise ValueError(
-            "측정되지 않은 값이 포함되어 있습니다. "
-            "원본 실험 결과를 확인해 주세요."
-        )
-
-    return validate_data(converted)
-
-
-# 입력표 공통 설정
+# 입력표 열 설정
 
 def editor_config(unit):
 
     return {
+
         "시간": st.column_config.NumberColumn(
             f"시간({unit})",
             min_value=0.0
         ),
+
         "누적 방출률(%)":
             st.column_config.NumberColumn(
                 min_value=0.0,
                 max_value=100.0
             )
+
     }
 
 
 # ==========================================
-# 3. 목표 방출 곡선 설정
+# 3. 메인 페이지에서 전달한 데이터 수신
+# ==========================================
+
+transfer = st.session_state.get(
+    "similarity_transfer"
+)
+
+has_transfer = transfer is not None
+
+is_demo = (
+    bool(transfer.get("is_demo", False))
+    if has_transfer
+    else False
+)
+
+if has_transfer:
+
+    if is_demo:
+
+        st.warning(
+            "영상·농도·방출 분석 페이지에서 전달된 "
+            "테스트용 가상 데이터입니다. "
+            "분석 결과는 기능 검증에만 활용하세요."
+        )
+
+    else:
+
+        st.success(
+            "영상·농도·방출 분석 결과가 "
+            "자동으로 연동되었습니다."
+        )
+
+
+# ==========================================
+# 4. 목표 방출 곡선 설정
 # ==========================================
 
 st.header("1. 목표 방출 곡선 설정")
@@ -179,10 +181,10 @@ st.write(
 )
 
 st.caption(
-    "표 하단의 + 버튼을 이용해 측정 시점을 "
-    "추가할 수 있습니다. "
-    "시간 단위를 변경하면 직접 입력란은 "
-    "해당 단위의 별도 입력란으로 전환됩니다."
+    "표 하단의 + 버튼을 이용하여 "
+    "측정 시점을 추가할 수 있습니다. "
+    "시간 단위를 변경하면 직접 입력표도 "
+    "해당 단위의 입력표로 전환됩니다."
 )
 
 target_data = st.data_editor(
@@ -201,12 +203,16 @@ try:
     target = validate_data(target_data)
 
     if (
-        np.diff(target["누적 방출률(%)"]) < 0
+        np.diff(
+            target["누적 방출률(%)"]
+        ) < 0
     ).any():
 
         raise ValueError(
             "목표 누적 방출률은 감소할 수 없습니다."
         )
+
+    st.subheader("목표 방출 곡선")
 
     st.line_chart(
         target.set_index("시간"),
@@ -217,316 +223,363 @@ try:
 except ValueError as e:
 
     target = None
+
     st.info(str(e))
 
 
 # ==========================================
-# 4. 실험 데이터 입력 방식 선택
+# 5. 실제 실험 데이터 입력
 # ==========================================
 
 st.divider()
 
 st.header("2. 실제 실험 데이터 입력")
 
-input_modes = st.multiselect(
-    "데이터 입력 방식",
-    [
-        "저장된 실험 데이터 불러오기",
-        "직접 입력"
-    ],
-    default=["직접 입력"]
-)
-
-st.caption(
-    "두 가지 입력 방식을 동시에 선택하여 "
-    "저장된 실험군과 직접 입력한 실험군을 "
-    "함께 비교할 수 있습니다."
-)
-
 experiments = []
 
 input_error = False
 
+
 # ==========================================
-# 5. 저장된 실험 데이터 불러오기
+# 6. 전달받은 실험 데이터 자동 입력
 # ==========================================
 
-if "저장된 실험 데이터 불러오기" in input_modes:
+if has_transfer:
 
-    st.subheader("저장된 실험 데이터")
+    st.subheader("자동 연동된 실험 데이터")
 
-    # main.py에서 저장한 실험군을 가져온다.
-    # 저장 구조: 실험군 이름 → (지름, 개수, 데이터)
+    try:
 
-    saved_groups = st.session_state.get(
-        "release_groups",
-        {}
-    )
+        # 메인 페이지에서 전달된 원본 데이터를 복사한다.
 
-    available_groups = {}
-    unavailable_groups = {}
+        imported = transfer["data"].copy()
 
-    for name, group in saved_groups.items():
+        required = [
+            "시간(분)",
+            "누적 방출률(%)"
+        ]
 
-        try:
+        if not all(
+            col in imported.columns
+            for col in required
+        ):
 
-            diameter, bead_count, df = group
-
-            converted = convert_release_data(
-                df,
-                unit
+            raise ValueError(
+                "전달된 데이터에 시간 또는 "
+                "누적 방출률이 없습니다."
             )
 
-            available_groups[
-                f"저장 실험군: {name}"
-            ] = {
-                "name": name,
-                "conditions": (
-                    f"평균 비드 지름: {diameter:g} mm\n"
-                    f"비드 개수: {bead_count}개"
-                ),
-                "data": converted
+        imported = imported[required].copy()
+
+        # 유사도 분석 페이지의 데이터 형식으로 변경한다.
+
+        imported = imported.rename(
+            columns={
+                "시간(분)": "시간"
             }
-
-        except (ValueError, TypeError, KeyError) as e:
-
-            unavailable_groups[name] = str(e)
-
-    # 실험 데이터 분석 페이지의 가장 최근 결과도
-    # 실험군 저장 여부와 관계없이 가져올 수 있도록 한다.
-
-    latest = st.session_state.get(
-        "latest_release"
-    )
-
-    if isinstance(latest, pd.DataFrame):
-
-        try:
-
-            converted = convert_release_data(
-                latest,
-                unit
-            )
-
-            available_groups[
-                "최근 방출 분석 결과"
-            ] = {
-                "name": "최근 방출 분석 결과",
-                "conditions": (
-                    "실험 데이터 분석 페이지의 "
-                    "최근 분석 결과"
-                ),
-                "data": converted
-            }
-
-        except ValueError as e:
-
-            unavailable_groups[
-                "최근 방출 분석 결과"
-            ] = str(e)
-
-    # 불러올 수 있는 실험군이 있는 경우
-
-    if available_groups:
-
-        selected_groups = st.multiselect(
-            "불러올 실험군 선택",
-            options=list(available_groups.keys())
         )
 
-        if not selected_groups:
+        # 메인 페이지의 분 단위를
+        # 사용자가 선택한 시간 단위로 환산한다.
 
-            st.info(
-                "비교할 실험군을 선택해 주세요."
+        imported["시간"] = (
+            imported["시간"]
+            * TIME_FACTORS[unit]
+        )
+
+        if imported.isna().any().any():
+
+            raise ValueError(
+                "전달된 데이터에 측정 불가 값이 포함되어 있습니다."
             )
 
-            input_error = True
+        imported = validate_data(
+            imported
+        )
 
-        for selected in selected_groups:
+        if is_demo:
 
-            imported = available_groups[selected]
+            st.warning(
+                f"테스트용 측정 데이터 "
+                f"{len(imported)}개가 자동 입력되었습니다."
+            )
 
-            with st.expander(
-                f"📂 {imported['name']}",
-                expanded=True
-            ):
+        else:
 
-                st.success(
-                    "실험 데이터 연동 완료"
+            st.success(
+                f"실험 측정 데이터 "
+                f"{len(imported)}개가 자동 입력되었습니다."
+            )
+
+        imported_name = st.text_input(
+            "실험군 이름",
+            value=transfer.get(
+                "name",
+                "현재 실험 결과"
+            ),
+            key="imported_experiment_name"
+        )
+
+        conditions = st.text_area(
+            "하이드로젤 제조 조건",
+            placeholder=(
+                "알지네이트 농도, 가교제 농도, "
+                "가교 시간, 비드 크기 등을 입력하세요."
+            ),
+            key="imported_conditions"
+        )
+
+        col1, col2 = st.columns(2)
+
+        volume = transfer.get(
+            "volume_ml"
+        )
+
+        initial_mass = transfer.get(
+            "initial_mass_mg"
+        )
+
+        with col1:
+
+            st.metric(
+                "외부 용액 부피",
+                (
+                    f"{volume:g} mL"
+                    if volume is not None
+                    else "정보 없음"
                 )
+            )
 
-                st.write(
-                    "**하이드로젤 제조 조건**"
+        with col2:
+
+            st.metric(
+                "초기 색소 포함량",
+                (
+                    f"{initial_mass:g} mg"
+                    if initial_mass is not None
+                    else "정보 없음"
                 )
+            )
 
-                st.write(
-                    imported["conditions"]
-                )
+        # 전달된 데이터가 실제 실험 데이터 영역에
+        # 자동으로 표시되도록 한다.
 
-                extra_conditions = st.text_area(
-                    "추가 제조 조건",
-                    placeholder=(
-                        "알지네이트 농도, 가교제 농도, "
-                        "가교 시간 등을 추가로 기록하세요."
-                    ),
-                    key=f"import_conditions_{selected}"
-                )
+        st.dataframe(
+            imported,
+            hide_index=True,
+            use_container_width=True,
+            column_config=editor_config(unit)
+        )
 
-                st.dataframe(
-                    imported["data"],
-                    hide_index=True,
-                    use_container_width=True,
-                    column_config=editor_config(unit)
-                )
+        st.caption(
+            "영상·농도·방출 분석 결과에서 "
+            "자동으로 가져온 데이터입니다. "
+            "별도로 입력할 필요가 없습니다."
+        )
 
-                st.caption(
-                    "불러온 측정값은 원본 데이터 보존을 "
-                    "위해 이 페이지에서 수정하지 않습니다."
-                )
+        if (
+            np.diff(
+                imported["누적 방출률(%)"]
+            ) < 0
+        ).any():
 
-                if (
-                    np.diff(
-                        imported["data"]["누적 방출률(%)"]
-                    ) < 0
-                ).any():
+            st.warning(
+                "누적 방출률이 감소하는 구간이 있습니다. "
+                "측정 오차 또는 계산 오류를 확인해 주세요."
+            )
 
-                    st.warning(
-                        "누적 방출률이 감소하는 구간이 "
-                        "있습니다. 측정 오차를 확인하세요."
-                    )
+        # 전달받은 데이터를 유사도 분석 대상에
+        # 직접 추가하는 핵심 코드이다.
 
-                conditions = imported["conditions"]
+        experiments.append({
 
-                if extra_conditions.strip():
+            "name": (
+                imported_name.strip()
+                or "현재 실험 결과"
+            ),
 
-                    conditions += (
-                        "\n" + extra_conditions.strip()
-                    )
+            "conditions": conditions,
 
-                experiments.append({
-                    "name": imported["name"],
-                    "conditions": conditions,
-                    "source": "실험 데이터 연동",
-                    "data": imported["data"].copy()
-                })
+            "source": (
+                "테스트용 가상 데이터"
+                if is_demo
+                else "영상·농도·방출 분석 연동"
+            ),
 
-    else:
+            "data": imported.copy(),
 
-        st.info(
-            "불러올 수 있는 실험 데이터가 없습니다. "
-            "실험 데이터 분석 페이지에서 방출률을 "
-            "계산하고 실험군을 저장해 주세요."
+            "is_demo": is_demo
+
+        })
+
+    except (
+        ValueError,
+        TypeError,
+        KeyError,
+        AttributeError
+    ) as e:
+
+        st.error(
+            f"실험 데이터 연동 오류: {e}"
         )
 
         input_error = True
 
-    # 불러올 수 없는 실험군과 그 이유를 표시한다.
+    if st.button(
+        "연동된 실험 데이터 제거",
+        key="remove_transfer"
+    ):
 
-    if unavailable_groups:
+        st.session_state.pop(
+            "similarity_transfer",
+            None
+        )
 
-        with st.expander(
-            "불러올 수 없는 실험 데이터 확인"
-        ):
+        st.session_state.pop(
+            "imported_experiment_name",
+            None
+        )
 
-            for name, reason in unavailable_groups.items():
+        st.session_state.pop(
+            "imported_conditions",
+            None
+        )
 
-                st.warning(
-                    f"{name}: {reason}"
-                )
+        st.rerun()
 
     st.caption(
-        "저장된 실험 데이터는 현재 브라우저 세션에서 "
-        "공유됩니다. 새로고침하거나 접속을 종료하면 "
-        "사라질 수 있습니다."
+        "연동된 데이터는 현재 접속 세션에서 유지됩니다."
     )
 
 
 # ==========================================
-# 6. 실제 실험 데이터 직접 입력
+# 7. 실험 데이터 직접 입력
 # ==========================================
 
-if "직접 입력" in input_modes:
+if has_transfer:
+
+    st.subheader("추가 실험군 직접 입력")
+
+    st.caption(
+        "연동된 실험 결과 외에 추가로 비교할 "
+        "실험군이 있는 경우 입력해 주세요."
+    )
+
+else:
 
     st.subheader("실험 데이터 직접 입력")
 
-    experiment_count = st.number_input(
-        "직접 입력할 실험군 수",
-        min_value=1,
-        max_value=10,
-        value=1,
-        step=1
+    st.caption(
+        "영상 분석 결과를 전달하지 않은 경우 "
+        "측정 데이터를 직접 입력할 수 있습니다."
     )
 
-    for i in range(experiment_count):
+# 자동 연동된 데이터가 있으면
+# 직접 입력할 실험군 수를 기본 0개로 설정한다.
 
-        with st.expander(
-            f"직접 입력 실험군 {i + 1}",
-            expanded=True
-        ):
+default_count = (
+    0 if has_transfer else 1
+)
 
-            name = st.text_input(
-                "실험군 이름",
-                value=f"실험군 {i + 1}",
-                key=f"manual_name_{i}"
-            )
+manual_count = st.number_input(
+    "직접 입력할 실험군 수",
+    min_value=0,
+    max_value=10,
+    value=default_count,
+    step=1,
+    key=(
+        "manual_count_linked"
+        if has_transfer
+        else "manual_count_unlinked"
+    )
+)
 
-            conditions = st.text_area(
-                "하이드로젤 제조 조건",
-                placeholder=(
-                    "알지네이트 농도, 가교제 농도, "
-                    "가교 시간, 비드 크기 등을 "
-                    "기록하세요."
-                ),
-                key=f"manual_conditions_{i}"
-            )
+for i in range(manual_count):
 
-            edited = st.data_editor(
-                create_empty_data(),
-                num_rows="dynamic",
-                hide_index=True,
-                use_container_width=True,
-                key=f"manual_data_{i}_{unit}",
-                column_config=editor_config(unit)
-            )
+    with st.expander(
+        f"직접 입력 실험군 {i + 1}",
+        expanded=True
+    ):
 
-            try:
+        name = st.text_input(
+            "실험군 이름",
+            value=f"실험군 {i + 1}",
+            key=f"manual_name_{i}"
+        )
 
-                valid = validate_data(edited)
+        conditions = st.text_area(
+            "하이드로젤 제조 조건",
+            placeholder=(
+                "알지네이트 농도, 가교제 농도, "
+                "가교 시간, 비드 크기 등을 입력하세요."
+            ),
+            key=f"manual_conditions_{i}"
+        )
 
-                if (
-                    np.diff(
-                        valid["누적 방출률(%)"]
-                    ) < 0
-                ).any():
+        manual_demo = st.checkbox(
+            "테스트용 가상 데이터",
+            value=is_demo if has_transfer else False,
+            key=f"manual_demo_{i}"
+        )
 
-                    st.warning(
-                        "누적 방출률이 감소하는 구간이 "
-                        "있습니다. 측정 오차 또는 "
-                        "계산 오류를 확인하세요."
-                    )
+        edited = st.data_editor(
+            create_empty_data(),
+            num_rows="dynamic",
+            hide_index=True,
+            use_container_width=True,
+            key=f"manual_data_{i}_{unit}",
+            column_config=editor_config(unit)
+        )
 
-                experiments.append({
-                    "name": (
-                        name.strip()
-                        or f"실험군 {i + 1}"
-                    ),
-                    "conditions": conditions,
-                    "source": "직접 입력",
-                    "data": valid
-                })
+        try:
 
-                st.success(
-                    "데이터 입력 완료"
+            valid = validate_data(edited)
+
+            if (
+                np.diff(
+                    valid["누적 방출률(%)"]
+                ) < 0
+            ).any():
+
+                st.warning(
+                    "누적 방출률이 감소하는 구간이 "
+                    "있습니다. 측정값을 확인해 주세요."
                 )
 
-            except ValueError as e:
+            experiments.append({
 
-                st.info(str(e))
-                input_error = True
+                "name": (
+                    name.strip()
+                    or f"실험군 {i + 1}"
+                ),
+
+                "conditions": conditions,
+
+                "source": (
+                    "직접 입력한 가상 데이터"
+                    if manual_demo
+                    else "직접 입력"
+                ),
+
+                "data": valid,
+
+                "is_demo": manual_demo
+
+            })
+
+            st.success(
+                "데이터 입력 완료"
+            )
+
+        except ValueError as e:
+
+            st.info(str(e))
+
+            input_error = True
 
 
 # ==========================================
-# 7. 분석 가능 여부 확인
+# 8. 유사도 분석 가능 여부 확인
 # ==========================================
 
 st.divider()
@@ -536,7 +589,8 @@ st.header("3. 방출 곡선 유사도 분석")
 if target is None:
 
     st.info(
-        "목표 방출 곡선을 먼저 입력해 주세요."
+        "목표 방출 곡선을 설정하면 "
+        "유사도 분석 결과가 자동으로 표시됩니다."
     )
 
     st.stop()
@@ -544,8 +598,7 @@ if target is None:
 if not experiments:
 
     st.info(
-        "실험 데이터를 불러오거나 "
-        "직접 입력해 주세요."
+        "실제 실험 데이터를 입력해 주세요."
     )
 
     st.stop()
@@ -553,21 +606,44 @@ if not experiments:
 if input_error:
 
     st.info(
-        "선택한 모든 입력 방식의 데이터 입력을 "
-        "완료해 주세요. 사용하지 않는 입력 방식은 "
-        "선택을 해제할 수 있습니다."
+        "입력 데이터 또는 연동 데이터를 확인해 주세요."
     )
 
     st.stop()
 
-st.success(
-    f"총 {len(experiments)}개 실험군의 "
-    "유사도를 분석합니다."
+# 실제 실험 결과와 가상 데이터를 혼합하여
+# 비교하지 않도록 한다.
+
+data_types = {
+    experiment["is_demo"]
+    for experiment in experiments
+}
+
+if len(data_types) > 1:
+
+    st.warning(
+        "실제 실험 데이터와 테스트용 가상 데이터는 "
+        "동시에 비교할 수 없습니다."
+    )
+
+    st.stop()
+
+analysis_demo = True in data_types
+
+if analysis_demo:
+
+    st.warning(
+        "현재 유사도 분석은 가상 데이터를 "
+        "이용한 기능 검증입니다."
+    )
+
+st.caption(
+    f"총 {len(experiments)}개 실험군을 분석합니다."
 )
 
 
 # ==========================================
-# 8. 유사도 계산 원리
+# 9. 유사도 계산 원리
 # ==========================================
 
 with st.expander("유사도 계산 원리"):
@@ -579,13 +655,13 @@ with st.expander("유사도 계산 원리"):
     )
 
     st.write(
-        "T는 목표 방출률, E는 실험 방출률, "
-        "n은 비교한 데이터의 개수입니다."
+        "T는 목표 방출률, E는 실제 방출률, "
+        "n은 비교 시점의 개수입니다."
     )
 
     st.write(
-        "RMSE가 작을수록 두 방출 곡선의 "
-        "차이가 작습니다."
+        "RMSE가 작을수록 목표 방출 곡선과 "
+        "실험 방출 곡선이 유사합니다."
     )
 
     st.latex(
@@ -594,47 +670,54 @@ with st.expander("유사도 계산 원리"):
 
     st.caption(
         "유사도 점수는 본 프로그램에서 정의한 "
-        "비교 지표이며, 공인된 약학적 평가 "
-        "지표는 아닙니다."
+        "비교 지표이며 공인된 약학적 평가 지표는 아닙니다."
     )
 
 
 # ==========================================
-# 9. 공통 분석 시간 범위 설정
+# 10. 공통 분석 시간 범위 설정
 # ==========================================
 
 start_time = max(
+
     [target["시간"].min()]
+
     + [
         e["data"]["시간"].min()
         for e in experiments
     ]
+
 )
 
 end_time = min(
+
     [target["시간"].max()]
+
     + [
         e["data"]["시간"].max()
         for e in experiments
     ]
+
 )
 
 if end_time <= start_time:
 
     st.error(
-        "목표 곡선과 실험군의 공통 측정 "
-        "시간 범위가 부족합니다."
+        "목표 곡선과 실험 결과의 "
+        "공통 측정 시간 범위가 부족합니다."
     )
 
     st.stop()
 
-# 모든 실험군을 동일한 시간 범위에서 비교한다.
+# 공통 시간 범위를 일정한 간격으로 나눈다.
 
 common_time = np.linspace(
     start_time,
     end_time,
     201
 )
+
+# 선형 보간으로 목표 방출률 계산
 
 target_y = np.interp(
     common_time,
@@ -643,24 +726,26 @@ target_y = np.interp(
 )
 
 chart_data = pd.DataFrame({
+
     "시간": common_time,
+
     "목표 방출 곡선": target_y
+
 })
 
 results = []
 
 
 # ==========================================
-# 10. 실험군별 유사도 계산
+# 11. 실험군별 유사도 계산
 # ==========================================
 
 for i, experiment in enumerate(experiments):
 
     data = experiment["data"]
 
-    # 측정 시간이 서로 다른 경우
-    # 선형 보간으로 동일한 시간에서 비교한다.
-    # 측정 범위를 벗어난 값은 추정하지 않는다.
+    # 측정 시간이 다른 경우 선형 보간을 적용한다.
+    # 측정 시간 범위 밖의 값은 추정하지 않는다.
 
     actual_y = np.interp(
         common_time,
@@ -668,11 +753,17 @@ for i, experiment in enumerate(experiments):
         data["누적 방출률(%)"]
     )
 
+    # 평균 제곱근 오차 계산
+
     rmse = np.sqrt(
+
         np.mean(
             (target_y - actual_y) ** 2
         )
+
     )
+
+    # 유사도 점수 계산
 
     similarity = 100 - rmse
 
@@ -684,39 +775,52 @@ for i, experiment in enumerate(experiments):
     chart_data[label] = actual_y
 
     results.append({
+
         "실험군": label,
+
         "데이터 출처": experiment["source"],
+
         "제조 조건": experiment["conditions"],
+
         "분석 시작 시간": start_time,
+
         "분석 종료 시간": end_time,
+
         "시간 단위": unit,
+
         "RMSE": float(rmse),
+
         "유사도 점수": float(similarity)
+
     })
 
 
 # ==========================================
-# 11. 방출 곡선 시각화
+# 12. 목표 및 실제 방출 곡선 비교
 # ==========================================
 
-st.subheader("방출 곡선 비교")
+st.subheader("목표 및 실제 방출 곡선 비교")
 
 st.caption(
     f"공통 분석 범위: "
     f"{start_time:g}~{end_time:g}{unit}"
 )
 
-if (
+partial_analysis = (
+
     start_time > target["시간"].min()
+
     or end_time < target["시간"].max()
-):
+
+)
+
+if partial_analysis:
 
     st.warning(
         "목표 시간 범위 전체를 비교할 수 없어 "
-        "모든 실험군에 공통으로 포함되는 "
-        "시간 범위만 분석했습니다. "
-        "이 결과를 전체 목표 곡선에 대한 "
-        "유사도로 해석하지 마세요."
+        "공통 시간 구간만 분석했습니다. "
+        "전체 목표 곡선에 대한 유사도로 "
+        "해석할 수 없습니다."
     )
 
 st.line_chart(
@@ -725,16 +829,23 @@ st.line_chart(
     y_label="누적 방출률(%)"
 )
 
+st.caption(
+    "측정 시점이 서로 다른 경우 "
+    "선형 보간을 이용하여 비교합니다."
+)
+
 
 # ==========================================
-# 12. 유사도 순위 표시
+# 13. 유사도 분석 결과
 # ==========================================
 
 st.divider()
 
 st.header("4. 유사도 분석 결과")
 
-ranking = pd.DataFrame(results)
+ranking = pd.DataFrame(
+    results
+)
 
 ranking = ranking.sort_values(
     "RMSE",
@@ -742,82 +853,128 @@ ranking = ranking.sort_values(
 ).reset_index(drop=True)
 
 ranking.insert(
+
     0,
+
     "순위",
+
     ranking["RMSE"].rank(
         method="min"
     ).astype(int)
+
 )
 
-for _, row in ranking.iterrows():
+# 실험군이 한 개일 경우 유사도와 RMSE를 바로 표시한다.
 
-    left, right = st.columns([3, 1])
+if len(ranking) == 1:
 
-    with left:
+    best = ranking.iloc[0]
 
-        st.write(
-            f'**{row["순위"]}위 · '
-            f'{row["실험군"]}**'
-        )
+    col1, col2 = st.columns(2)
 
-        st.progress(
-            float(
-                np.clip(
-                    row["유사도 점수"] / 100,
-                    0,
-                    1
-                )
-            )
-        )
-
-        st.caption(
-            f'데이터 출처: {row["데이터 출처"]}'
-        )
-
-    with right:
+    with col1:
 
         st.metric(
-            "유사도",
-            f'{row["유사도 점수"]:.2f}점'
+            "목표 곡선 유사도",
+            f'{best["유사도 점수"]:.2f}점'
         )
+
+    with col2:
+
+        st.metric(
+            "평균 제곱근 오차",
+            f'{best["RMSE"]:.3f}%p'
+        )
+
+    st.progress(
+        float(
+            np.clip(
+                best["유사도 점수"] / 100,
+                0,
+                1
+            )
+        )
+    )
 
     st.caption(
-        f'RMSE: {row["RMSE"]:.3f}%p'
+        f'데이터 출처: {best["데이터 출처"]}'
     )
 
+else:
 
-# ==========================================
-# 13. 가장 유사한 실험군 표시
-# ==========================================
+    # 여러 실험군이 있는 경우 유사도 순위를 표시한다.
 
-best_groups = ranking[
-    ranking["순위"] == 1
-]
+    for _, row in ranking.iterrows():
 
-st.subheader(
-    "목표 방출 특성에 가장 가까운 실험군"
-)
+        left, right = st.columns([3, 1])
 
-for _, best in best_groups.iterrows():
+        with left:
 
-    st.success(
-        f'{best["실험군"]} — '
-        f'유사도 {best["유사도 점수"]:.2f}점'
-    )
+            st.write(
+                f'**{row["순위"]}위 · '
+                f'{row["실험군"]}**'
+            )
 
-    if best["제조 조건"].strip():
+            st.progress(
+                float(
+                    np.clip(
+                        row["유사도 점수"] / 100,
+                        0,
+                        1
+                    )
+                )
+            )
 
-        st.write(
-            "**하이드로젤 제조 조건**"
+            st.caption(
+                f'데이터 출처: {row["데이터 출처"]}'
+            )
+
+        with right:
+
+            st.metric(
+                "유사도 점수",
+                f'{row["유사도 점수"]:.2f}점'
+            )
+
+        st.caption(
+            f'RMSE: {row["RMSE"]:.3f}%p'
         )
 
-        st.write(best["제조 조건"])
+    st.subheader(
+
+        "목표 방출 곡선에 가장 가까운 실험군"
+
+        if not partial_analysis
+
+        else "공통 시간 구간에서 가장 가까운 실험군"
+
+    )
+
+    best_groups = ranking[
+        ranking["순위"] == 1
+    ]
+
+    for _, best in best_groups.iterrows():
+
+        st.success(
+            f'{best["실험군"]} — '
+            f'유사도 {best["유사도 점수"]:.2f}점'
+        )
+
+        if best["제조 조건"].strip():
+
+            st.write(
+                "**하이드로젤 제조 조건**"
+            )
+
+            st.write(
+                best["제조 조건"]
+            )
 
 st.caption(
-    "본 분석은 입력된 실험 데이터에 대한 "
-    "비교 결과이며, 실험하지 않은 제조 조건의 "
-    "방출 특성이나 실제 약물의 치료 효과를 "
-    "예측하지 않습니다."
+    "본 분석은 입력된 실험 결과에 대한 비교이며, "
+    "실험하지 않은 제조 조건의 방출 특성이나 "
+    "실제 약물의 치료 효과를 예측하지 않습니다."
 )
 
 
@@ -837,16 +994,30 @@ st.dataframe(
 
 col1, col2 = st.columns(2)
 
+# 가상 데이터의 다운로드 파일명과 출처를 구분한다.
+
+file_prefix = (
+    "demo_" if analysis_demo else ""
+)
+
 with col1:
 
     st.download_button(
+
         label="📥 유사도 분석 결과 CSV 다운로드",
+
         data=ranking.to_csv(
             index=False
         ).encode("utf-8-sig"),
-        file_name="release_similarity.csv",
+
+        file_name=(
+            f"{file_prefix}release_similarity.csv"
+        ),
+
         mime="text/csv",
+
         use_container_width=True
+
     )
 
 with col2:
@@ -855,14 +1026,28 @@ with col2:
         columns={
             "시간": f"시간({unit})"
         }
+    ).copy()
+
+    export_chart["데이터 구분"] = (
+        "테스트용 가상 데이터"
+        if analysis_demo
+        else "실험 데이터"
     )
 
     st.download_button(
+
         label="📥 방출 곡선 데이터 CSV 다운로드",
+
         data=export_chart.to_csv(
             index=False
         ).encode("utf-8-sig"),
-        file_name="release_curves.csv",
+
+        file_name=(
+            f"{file_prefix}release_curves.csv"
+        ),
+
         mime="text/csv",
+
         use_container_width=True
+
     )
