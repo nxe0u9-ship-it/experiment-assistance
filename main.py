@@ -5,7 +5,18 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-st.set_page_config(page_title='HydroRelease Lab', layout='wide')
+# pages 폴더의 Python 파일은 Streamlit이 자동으로 사이드바에 연결한다.
+st.set_page_config(
+    page_title='HydroRelease Lab',
+    layout='wide',
+    initial_sidebar_state='expanded'
+)
+
+# 기본 페이지 이동 메뉴 아래에 프로젝트 안내를 표시한다.
+with st.sidebar:
+    st.divider()
+    st.caption('HydroRelease Lab')
+    st.caption('하이드로젤 물질 방출 분석 시스템')
 
 # 업로드한 영상을 OpenCV에서 읽을 수 있도록 임시 저장한다.
 def save_video(upload):
