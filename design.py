@@ -215,18 +215,13 @@ def apply_design():
 def sidebar_brand():
     """사이드바의 프로젝트 로고 영역."""
 
-    st.markdown('''
-    <div class="lab-brand">
-        <div class="lab-brand-kicker">
-            BIOMATERIALS · RESEARCH LAB
-        </div>
-
-        <div class="lab-brand-name">
-            HydroRelease Lab
-        </div>
-
-        <div class="lab-brand-desc">
-            하이드로젤 물질 방출 분석 시스템
-        </div>
-    </div>
-    ''', unsafe_allow_html=True)
+    st.markdown(
+        """
+<div class="lab-brand">
+<div class="lab-brand-kicker">BIOMATERIALS · RESEARCH LAB</div>
+<div class="lab-brand-name">HydroRelease Lab</div>
+<div class="lab-brand-desc">하이드로젤 물질 방출 분석 시스템</div>
+</div>
+        """,
+        unsafe_allow_html=True
+    )
